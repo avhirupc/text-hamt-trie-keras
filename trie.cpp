@@ -896,27 +896,42 @@ int main () {
 
     Results: consistent 75% / 4.5 times gains over standard HAMT and 15-20 times over hashmap based Trie
 
-    @@ GAIN unrolled (multicore) : 75.7913%, and ratio: 4.13074
-    @@ GAIN adaptive (multicore) : -149.631%, and ratio: 0.400591
-    @@ GAIN hash Trie (multicore) : 94.3322%, and ratio: 17.6434
-
     Word Count : 370099
-    Word Count after mutation : 9765965
-    Making array of size: 13441935
-    Add times @Custom: 6408142, @Hash: 24613700
-    Search times @Hash: 14804479
-    Search times @Custom_Mapped: 23075, @Custom_BuiltIn: 3659892
-    Total Node Count: 6720968, byte count: 322606416, Hashed trie node count: 6720968
-    Trie Unrolling time: 1106207, Search time: 920972
-    %% search gain over base : 93.7791%, over std hamt: 74.8361% 
-    Space Efficiency: 55.5556%% over base, 33.3333%% over std hamt
-    Adaptive Node Count : 6720968
-    root children size : 26
-    Making array of size: 13441935
-    0 is root? 1
 
-    Done Adaptive flatening!! time: 17055127
-    Adaptive Search times: 2260474
-    gain :: -145.444%%
-    @Net gain : 38.2366
+    @@ time taken (single_core - HAMT construction) : 422494
+    @@ time taken (single_core - HASH TRIE construction) : 938945
+
+    Word Count after mutation : 9765965
+
+    @@ time taken - std hamt search (multithreaded) : 457478
+
+    Making array of size: 2055603
+
+    @@ time taken - unrolled search (multithreaded) : 157847
+    @@ GAIN unrolled (multicore) : 65.4963%, and ratio: 2.89824
+
+    Space Eff.: 55.5556% base, 33.3333% std hamt
+
+    Making array of size: 2055603
+
+    Done Adaptive flatening!! time: 3710837
+
+    @@ time taken - adaptive search (multithreaded) : 271302
+    @@ GAIN adaptive (multicore) : -71.8766%, and ratio: 0.581813
+
+    # order: greater, less, none
+    @@ time taken - localized search (multithreaded) : 29023
+    @@ GAIN localized (multicore) over unrolled hamt : 81.6132%, and ratio: 5.43869
+    @@ GAIN localized (multicore) over standard hamt : 93.6559%, and ratio: 15.7626
+
+    @@ time taken - localized search (multithreaded) : 29693
+    @@ GAIN localized (multicore) over unrolled hamt : 81.1887%, and ratio: 5.31597
+    @@ GAIN localized (multicore) over standard hamt : 93.5094%, and ratio: 15.4069
+
+    @@ time taken - localized search (multithreaded) : 35635
+    @@ GAIN localized (multicore) over unrolled hamt : 77.4243%, and ratio: 4.42955
+    @@ GAIN localized (multicore) over standard hamt : 92.2106%, and ratio: 12.8379
+
+    @@ time taken - hash Trie search (multithreaded) : 220111
+    @@ GAIN hash Trie (multicore) : 28.2875%, and ratio: 1.39446
 */
