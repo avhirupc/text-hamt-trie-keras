@@ -33,13 +33,14 @@ long long extra_byte_count = 0;
 //TODO: testing: track byte allocation
 const bool MUTATE_WORD_LIST = true;
 const bool RUN_HASH_TRIE_BENCHMARK = true;
+const bool RUN_ADAPTIVE_BENCHMARK = true;
+const bool RUN_LOCALIZED_BENCHMARK = true;
+const bool RUN_STD_HAMT_BENCHMARK = true;
 
 // efficient trie
 struct node {
     byte_8 map; 
-    node ** next;
     vector <node> next_v;
-    int count;  //TODO: count for testing only, remove
 };
 
 unordered_map<int, int> valToBitCount;
@@ -180,27 +181,27 @@ inline uint8_t get_set_bits_r(byte_8 &map, uint8_t n){
 inline void expand_arr(node* &root, byte_8 &map, uint8_t &index){
     //TODO: testing: remove
     extra_byte_count += sizeof(node);
-    root->next_v.insert(root->next_v.begin() + index, node({0, nullptr, vector<node>(), 0}));
+    root->next_v.insert(root->next_v.begin() + index, node({0, vector<node>()}));
     // instead of iteratively expanding array, double it? 
 }
 
 inline void expand_custom_arr(node* &root, byte_8 &map, uint8_t &index){
     // remove testing block, replace MAX_BITS with (8*4)-1
-    uint8_t len = get_set_bits_r(map, MAX_BITS);
-    if (!len){
-            root->next = new node*[1];
-            return;
-        }
-        node * n_next[len+1];
-    for (uint8_t i=0; i<index; ++i){
-        n_next[i] = root->next[i];
-    }
-    // merge loops with conditional?
-    for (uint8_t i=index+1; i<len+1; ++i){
-        n_next[i] = root->next[i-1];
-    }
-    // delete[] root->next;
-    root->next = n_next;
+    // uint8_t len = get_set_bits_r(map, MAX_BITS);
+    // if (!len){
+    //         root->next = new node*[1];
+    //         return;
+    //     }
+    //     node * n_next[len+1];
+    // for (uint8_t i=0; i<index; ++i){
+    //     n_next[i] = root->next[i];
+    // }
+    // // merge loops with conditional?
+    // for (uint8_t i=index+1; i<len+1; ++i){
+    //     n_next[i] = root->next[i-1];
+    // }
+    // // delete[] root->next;
+    // root->next = n_next;
 }
 
 void add_word(node *root, const char * word){
@@ -288,21 +289,27 @@ void insert(Trie*& root, const string& str){
 bool search(Trie* root, const string& str){
     if (root == nullptr)
         return false;
- 
     Trie* temp = root;
+    std::unordered_map<char, Trie*>::iterator nxt = temp->map.begin();
     for (int i = 0; i < str.length(); i++) {
-        temp = temp->map[str[i]];
-        if (temp == nullptr)
+        nxt = temp->map.find(str[i]);
+        if (nxt != temp->map.end()){
             return false;
+        } temp = nxt->second;
     }
     return temp->isEndOfWord;
 }
 
+uint32_t* g_test_local = nullptr;
+vector<uint32_t> g_test_hist;
 //cache miss friendly implementation, convert nodes into a continuous array
 uint32_t* TrieUnrolling(uint32_t *trie_node_arr, node* root){
     int arr_size = total_node_count + (total_node_count - 1);
     cout << "Making array of size: " << arr_size << endl;
     trie_node_arr = new uint32_t[arr_size];
+
+    g_test_local = new uint32_t[arr_size];
+    
     queue<node*> trie_nodes;
     queue<int> parent;
     trie_nodes.push(root);
@@ -310,6 +317,10 @@ uint32_t* TrieUnrolling(uint32_t *trie_node_arr, node* root){
     int index = 0;
     int cur_parent = 0;
     int cur_child_count = 0;
+
+    int g_test_child_node_count = 0;
+    int g_test_index = 0;
+
     while (!trie_nodes.empty()){
         node* cur = trie_nodes.front(); trie_nodes.pop();
         int parent_index = parent.front(); parent.pop();
@@ -324,6 +335,14 @@ uint32_t* TrieUnrolling(uint32_t *trie_node_arr, node* root){
             trie_node_arr[parent_index + cur_child_count] = index; 
         }
         int n_children = __builtin_popcount(cur->map);
+
+        g_test_local[g_test_index] = cur->map;
+        if (n_children){
+            g_test_local[g_test_index+1] = (g_test_index/2+1 + trie_nodes.size())*2;
+        }
+        g_test_child_node_count += n_children;
+        g_test_index += 2;
+
         for(int i=0; i<n_children; ++i){
             trie_nodes.push(&cur->next_v[i]);
             parent.push(index);
@@ -331,6 +350,79 @@ uint32_t* TrieUnrolling(uint32_t *trie_node_arr, node* root){
         index+=n_children+1;
     }
     return trie_node_arr;
+}
+
+uint32_t* ConstructLocalized(node* root){
+    queue<node*>* cur_l;
+    queue<node*>* next_l;
+    queue<uint32_t>* parent_nxt;
+    queue<uint32_t>* parent_cur;
+    int arr_size = total_node_count + (total_node_count - 1);
+    uint32_t *arr = new uint32_t[arr_size];
+    next_l = new queue<node*>();
+    cur_l = new queue<node*>();
+    parent_nxt = new queue<uint32_t>();
+    parent_cur = new queue<uint32_t>();
+    cur_l->push(root);
+    parent_cur->push(-1);
+    int index = 0;
+    while(!cur_l->empty()){
+        node* cur = cur_l->front();
+        uint32_t par = parent_cur->front();
+        parent_cur->pop();
+        cur_l->pop();
+        // TODO: implement level sorting
+        arr[index] = cur->map;
+
+        if (par >= 0){
+            arr[par+1] = index;
+        }
+
+        int c_count = cur->next_v.size();
+        if (c_count){
+            parent_nxt->push(index);
+            c_count--;
+        }
+        for (int i=0; i<c_count; ++i){
+            parent_nxt->push(-1);
+        }
+        for(auto &a : cur->next_v){
+            next_l->push(&a);
+        }
+
+        if (cur_l->empty()){
+            queue<node*>* temp = cur_l;
+            queue<uint32_t>* parent_temp = parent_cur;
+
+            cur_l = next_l;
+            next_l = temp;
+
+            parent_cur = parent_nxt;
+            parent_nxt = parent_temp;
+        }
+    }
+    return arr;
+}
+
+bool testCompareArr(uint32_t* localized_arr, uint32_t* arr){
+    int indp = 0;
+    int indn = 0;
+    for (int i=0; i<total_node_count; i++){
+        if (arr[indp] != localized_arr[indn]){
+            // cout << "anomally in ordering - test!" << endl;
+        }
+        int n_child = __builtin_popcount(arr[indp]);
+        if (n_child)
+            cout << n_child << ", ";
+        for (int j=0; j<n_child; ++j){
+            // cout << "mapping child... ";
+            if (localized_arr[localized_arr[indn+1] + 2*j] != arr[arr[indp+j+1]] ){
+                // cout << "anomally in children - test!" << endl;
+            }
+        }
+        indp += n_child;
+        indn += 2;
+    }
 }
 
 inline bool unrolledSearch(uint32_t* arr, const char *word){
@@ -345,6 +437,24 @@ inline bool unrolledSearch(uint32_t* arr, const char *word){
         }
     }
     if (arr[index] & 1 << MAX_BITS)
+        return true; // word ends here
+    return false;
+}
+
+inline bool localizedUnrolledSearch(uint32_t* localized_arr, const char *word){
+    int index = 0;
+    for (const char *ch=word; *ch != '\0'; ++ch){
+        // cout << "looping ... ";
+        uint32_t &_map = localized_arr[index];
+        uint32_t _charIndexMask = (1 << (*ch - 'a'));
+        if (_map & _charIndexMask){
+            index = localized_arr[index+1] + __builtin_popcount(_map & (_charIndexMask - 1 )) << 2;
+        }else {
+            // cout << "returning false";
+            return false;
+        }
+    }
+    if (localized_arr[index] & 1 << MAX_BITS)
         return true; // word ends here
     return false;
 }
@@ -442,6 +552,14 @@ uint32_t* AdaptiveTrieFlattening(uint32_t* trie_node_arr, AdaptiveTrieNode* root
     return trie_node_arr;
 }
 
+uint32_t* AdaptiveTrieFlattening_localized(uint32_t* arr, uint32_t* prearr){
+
+}
+
+// TODO: implement, address of child in 2nd half of array
+// TODO: implement, localized search sorted children by accesses
+uint64* AdaptiveTrieFlattening_64bit(){}
+
 vector<string> mutateList(vector<string> &list){
     vector<string> newlist;
     srand (time(NULL));
@@ -509,6 +627,12 @@ void adaptiveSearchRoutine(uint32_t *arr, vector<string> *list, int st, int en){
     }
 }
 
+void localizedSearchRoutine(uint32_t* localized_arr, vector<string> *list, int st, int en){
+    for (int i=st; i<en; ++i){
+        localizedUnrolledSearch(localized_arr, (*list)[i].c_str());
+    }
+}
+
 AdaptiveTrieNode* adaptiveAddRoutine(node* root, vector<string> &list, int &lim){
     AdaptiveTrieNode* a_root = constructAdaptiveTrie(root);
 
@@ -543,48 +667,60 @@ int main () {
         myfile.close();
     } else cout << "Unable to open file"; 
 
-    cout << "Word Count : " << word_count << endl;
-    if (MUTATE_WORD_LIST){
-        list = mutateList(list);
-        cout << "Word Count after mutation : " << list.size() << endl;
-    }
+    cout << "Word Count : " << word_count << endl;   
 
     int lim = list.size();
-
-    node start = {0, nullptr};
+    node start = {0, vector<node>()};
     Trie* root = nullptr;
     
     uint64 t_add_1_s = GetTimeMs64();
     for (int i=0; i<lim; ++i){
         add_word(&start, list[i].c_str());
     }
-    
     uint64 t_add_1_e = GetTimeMs64();
 
-    cout << "time taken (single_core) : " << t_add_1_e - t_add_1_s << endl;
+    cout << "@@ time taken (single_core - HAMT construction) : " << t_add_1_e - t_add_1_s << endl;
+
+    if (RUN_HASH_TRIE_BENCHMARK){
+        uint64 t_add_2_s = GetTimeMs64();
+        for (int i=0; i<lim; ++i){
+            insert(root, list[i]);
+        }
+        uint64 t_add_2_e = GetTimeMs64();
+        cout << "@@ time taken (single_core - HASH TRIE construction) : " << t_add_2_e - t_add_2_s << endl;
+    }
+
+    if (MUTATE_WORD_LIST){
+        list = mutateList(list);
+        cout << "Word Count after mutation : " << list.size() << endl;
+        lim = list.size();
+    }
 
     uint64 start_thread_t = GetTimeMs64();
     int n_threads = 11; 
     thread* t_store[n_threads];
     int chunk_size = (lim + n_threads) / n_threads;
+    uint64 std_hamt_time = 1;
+    uint64 end_thread_t = 2;
 
-    for (int i=0; i<n_threads; ++i){
-        int st = (i * chunk_size);
-        int end = ((i + 1) * chunk_size)-1;
-        if (end >= lim)
-            end = lim-1;
-        if (st >= lim)
-            st = lim-1;
-        t_store[i] = new thread(searchRoutine, &start, &list, st, end);
-    }
-    for (int i=0; i<n_threads; ++i){
-        t_store[i]->join();
-    }
+    if (RUN_STD_HAMT_BENCHMARK){
+        for (int i=0; i<n_threads; ++i){
+            int st = (i * chunk_size);
+            int end = ((i + 1) * chunk_size)-1;
+            if (end >= lim)
+                end = lim-1;
+            if (st >= lim)
+                st = lim-1;
+            t_store[i] = new thread(searchRoutine, &start, &list, st, end);
+        }
+        for (int i=0; i<n_threads; ++i){
+            t_store[i]->join();
+        }
 
-    uint64 end_thread_t = GetTimeMs64();
-    uint64 std_hamt_time = end_thread_t - start_thread_t;
-    cout << "time taken - std hamt search (multithreaded) : " << std_hamt_time << endl;
-    cout << total_node_count << endl;
+        end_thread_t = GetTimeMs64();
+        std_hamt_time = end_thread_t - start_thread_t;
+        cout << "@@ time taken - std hamt search (multithreaded) : " << std_hamt_time << endl;
+    }
 
     uint32_t *arr = nullptr;
 
@@ -609,52 +745,83 @@ int main () {
 
     end_thread_t = GetTimeMs64();
     uint64 unrolled_hamt_time = end_thread_t - start_thread_t;
-    cout << "time taken - unrolled search (multithreaded) : " << unrolled_hamt_time << endl;
-    cout << total_node_count << endl;
+    cout << "@@ time taken - unrolled search (multithreaded) : " << unrolled_hamt_time << endl;
     cout << "@@ GAIN unrolled (multicore) : " << double(std_hamt_time - unrolled_hamt_time) / double(std_hamt_time) * 100 << "%, and ratio: " << double(std_hamt_time) / double(unrolled_hamt_time) << endl;
 
     double hamt_bytes = double((total_node_count - 1) * 8 + 4 * total_node_count);
     int hamt_final_bytes = 4 * (total_node_count + (total_node_count - 1));
     int hash_bytes = trie_node_count + (trie_node_count - 1) * (1 + 8) + sizeof(new map<char, Trie*>()) * trie_node_count;
 
-    cout << "Space Efficiency: " << double(hash_bytes - hamt_final_bytes) / double(hash_bytes) * 100 << "%% over base, " << (hamt_bytes - hamt_final_bytes) / hamt_bytes * 100 << "%% over std hamt" << endl;
+    cout << "Space Eff.: " << double(hash_bytes - hamt_final_bytes) / double(hash_bytes) * 100 << "% base, " << (hamt_bytes - hamt_final_bytes) / hamt_bytes * 100 << "% std hamt" << endl;
 
-    AdaptiveTrieNode* a_root = adaptiveAddRoutine(&start, list, lim);
-    uint32_t *adapt_arr = nullptr; 
-    uint64 t_am_s_s = GetTimeMs64();
-    adapt_arr = AdaptiveTrieFlattening(adapt_arr, a_root);
-    uint64 t_am_s_e = GetTimeMs64();
-    cout << "Done Adaptive flatening!! time: " << t_am_s_e - t_am_s_s << endl;
-
-    start_thread_t = GetTimeMs64();
-    for (int i=0; i<n_threads; ++i){
-        int st = (i * chunk_size);
-        int end = ((i + 1) * chunk_size)-1;
-        if (end >= lim)
-            end = lim-1;
-        if (st >= lim)
-            st = lim-1;
-        t_store[i] = new thread(adaptiveSearchRoutine, adapt_arr, &list, st, end);
-    }
-    for (int i=0; i<n_threads; ++i){
-        t_store[i]->join();
-    }
-
-    end_thread_t = GetTimeMs64();
-    double adaptive_hamt_time = double(end_thread_t - start_thread_t);
-    cout << "time taken - adaptive search (multithreaded) : " << adaptive_hamt_time << endl;
-    cout << total_node_count << endl;
-    cout << "@@ GAIN adaptive (multicore) : " << (double(unrolled_hamt_time) - adaptive_hamt_time) / double(unrolled_hamt_time) * 100 << "%, and ratio: " << double(unrolled_hamt_time) / double(adaptive_hamt_time) << endl;
-
-    if (RUN_HASH_TRIE_BENCHMARK){
-        uint64 t_add_2_s = GetTimeMs64();
-        for (int i=0; i<lim; ++i){
-            insert(root, list[i]);
-        }
-        uint64 t_add_2_e = GetTimeMs64();
+    if (RUN_ADAPTIVE_BENCHMARK){
+        AdaptiveTrieNode* a_root = adaptiveAddRoutine(&start, list, lim);
+        uint32_t *adapt_arr = nullptr; 
+        uint64 t_am_s_s = GetTimeMs64();
+        adapt_arr = AdaptiveTrieFlattening(adapt_arr, a_root);
+        uint64 t_am_s_e = GetTimeMs64();
+        cout << "Done Adaptive flatening!! time: " << t_am_s_e - t_am_s_s << endl;
 
         start_thread_t = GetTimeMs64();
+        for (int i=0; i<n_threads; ++i){
+            int st = (i * chunk_size);
+            int end = ((i + 1) * chunk_size)-1;
+            if (end >= lim)
+                end = lim-1;
+            if (st >= lim)
+                st = lim-1;
+            t_store[i] = new thread(adaptiveSearchRoutine, adapt_arr, &list, st, end);
+        }
+        for (int i=0; i<n_threads; ++i){
+            t_store[i]->join();
+        }
 
+        end_thread_t = GetTimeMs64();
+        double adaptive_hamt_time = double(end_thread_t - start_thread_t);
+        cout << "@@ time taken - adaptive search (multithreaded) : " << adaptive_hamt_time << endl;
+        cout << "@@ GAIN adaptive (multicore) : " << (double(unrolled_hamt_time) - adaptive_hamt_time) / double(unrolled_hamt_time) * 100 << "%, and ratio: " << double(unrolled_hamt_time) / double(adaptive_hamt_time) << endl;
+    }
+
+    // single core localized search
+    uint32_t* localized_arr = ConstructLocalized(&start);
+    testCompareArr(localized_arr, arr);
+    // for (int i=0; i<lim; ++i){
+    //     if ( search(root, list[i]) != unrolledSearch(arr, list[i].c_str())){
+    //         cout << "test failed!!!!" << endl;
+    //     }
+    // }
+    // cout << "$$$$$$ done!" << endl;
+    for (int i=0; i<lim; ++i){
+        if ( search(root, list[i]) != localizedUnrolledSearch(localized_arr, list[i].c_str())){
+            cout << "$$$$ test failed!!!!" << endl;
+        }
+    }
+
+
+///////
+    if (RUN_LOCALIZED_BENCHMARK){
+        start_thread_t = GetTimeMs64();
+        for (int i=0; i<n_threads; ++i){
+            int st = (i * chunk_size);
+            int end = ((i + 1) * chunk_size)-1;
+            if (end >= lim)
+                end = lim-1;
+            if (st >= lim)
+                st = lim-1;
+            t_store[i] = new thread(localizedSearchRoutine, localized_arr, &list, st, end);
+        }
+        for (int i=0; i<n_threads; ++i){
+            t_store[i]->join();
+        }
+        end_thread_t = GetTimeMs64();
+        double localized_hamt_time = double(end_thread_t - start_thread_t);
+        cout << "@@ time taken - localized search (multithreaded) : " << localized_hamt_time << endl;
+        cout << "@@ GAIN localized (multicore) : " << (double(unrolled_hamt_time) - localized_hamt_time) / double(unrolled_hamt_time) * 100 << "%, and ratio: " << double(unrolled_hamt_time) / double(localized_hamt_time) << endl;
+    }
+///////
+
+    if (RUN_HASH_TRIE_BENCHMARK){
+        start_thread_t = GetTimeMs64();
         for (int i=0; i<n_threads; ++i){
             int st = (i * chunk_size);
             int end = ((i + 1) * chunk_size)-1;
@@ -664,14 +831,14 @@ int main () {
                 st = lim-1;
             t_store[i] = new thread(HashSearchRoutine, root, &list, st, end);
         }
+
         for (int i=0; i<n_threads; ++i){
             t_store[i]->join();
         }
-
+        
         end_thread_t = GetTimeMs64();
         double hash_trie = double(end_thread_t - start_thread_t);
-        cout << "time taken - hash Trie search (multithreaded) : " << hash_trie << endl;
-        cout << total_node_count << endl;
+        cout << "@@ time taken - hash Trie search (multithreaded) : " << hash_trie << endl;
         cout << "@@ GAIN hash Trie (multicore) : " << (double(hash_trie) - unrolled_hamt_time) / double(hash_trie) * 100 << "%, and ratio: " << double(hash_trie) / double(unrolled_hamt_time) << endl;
     }
 
