@@ -136,6 +136,7 @@ uint32_t* AdaptiveTrieFlattening(uint32_t* trie_node_arr, AdaptiveTrieNode* root
 // localized adaptive algorithms - (best performance currently)
 uint32_t* ConstructLocalized(AdaptiveTrieNode* root, bool greater, bool perform_sort);
 inline bool localizedAdaptiveUnrolledSearch(uint32_t* localized_arr, const char *word);
+inline bool localizedAdaptiveUnrolledSearchPointRelative(uint32_t* localized_arr, const char *word);
 
 // word mutator
 vector<string> mutateList(vector<string> &list);
