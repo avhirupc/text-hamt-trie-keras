@@ -20,7 +20,10 @@
 #include <ctime>
 #endif
 
-#define MAX_BITS (8*4)-1
+#define MAX_BITS 32
+#define MAX_LEFT_SHIFT_BITS 31
+#define UINT32_MAX_BIT_SET 2147483648
+#define UINT32_MAX_BIT_SET_COMPLEMENT 2147483647
 
 using namespace std;
 
@@ -31,12 +34,13 @@ typedef uint32_t byte_8;
 typedef long long int64; typedef unsigned long long uint64;
 long long extra_byte_count = 0;
 //TODO: testing: track byte allocation
+const bool LIMIT_WORD_LIST = false;
 const bool MUTATE_WORD_LIST = true;
 const bool RUN_HASH_TRIE_BENCHMARK = true;
 const bool RUN_ADAPTIVE_BENCHMARK = true;
 const bool RUN_LOCALIZED_BENCHMARK = true;
 const bool RUN_STD_HAMT_BENCHMARK = true;
-const bool RUN_LOCALIZED_CORRECTNESS_TEST = true; // needs adaptive benchmark set to true, decouple adaptive construction from benchmark
+const bool RUN_LOCALIZED_CORRECTNESS_TEST = false; // needs adaptive benchmark set to true, decouple adaptive construction from benchmark
 
 // efficient trie
 struct node {
@@ -143,7 +147,7 @@ void unrolledSearchRoutine(uint32_t *arr, vector<string> *list, int st, int en);
 void addRoutine(node* root, vector<string> *list, int st, int en);
 void adaptiveSearchRoutine(uint32_t *arr, vector<string> *list, int st, int en);
 AdaptiveTrieNode* adaptiveAddRoutine(node* root, vector<string> &list, int &lim);
-void localizedAdaptiveSearchRoutine(uint32_t* localized_arr, vector<string> *list, int st, int en);
+void localizedAdaptiveSearchRoutine(uint32_t* localized_arr, vector<string> *list, int st, int en, int type);
 
 /* FUNC declarations end */
 
@@ -243,7 +247,9 @@ void add_word(node *root, const char * word){
         root = &(root->next_v[index]);
     }
     // marking word ending by setting max bit
-    root->map &= 1 << MAX_BITS;
+    root->map = root->map | UINT32_MAX_BIT_SET;
+    // cout << bitset<MAX_BITS>(UINT32_MAX_BIT_SET) << endl;
+    // cout << bitset<MAX_BITS>(root->map) << endl;
     add_mutex.unlock();
 }
 
@@ -280,7 +286,7 @@ inline bool check_word_builtin(node *root, const char *word){
         }
         root = &(root->next_v[__builtin_popcount(root->map & (bitmask - 1))]);
     }
-    if (root->map & 1 << MAX_BITS)
+    if (root->map & UINT32_MAX_BIT_SET)
         return true; // word ends here
     return false;
 }
@@ -315,7 +321,7 @@ bool search(Trie* root, const string& str){
     std::unordered_map<char, Trie*>::iterator nxt = temp->map.begin();
     for (int i = 0; i < str.length(); i++) {
         nxt = temp->map.find(str[i]);
-        if (nxt != temp->map.end()){
+        if (nxt == temp->map.end()){
             return false;
         } temp = nxt->second;
     }
@@ -341,12 +347,12 @@ uint32_t* TrieUnrolling(uint32_t *trie_node_arr, node* root){
 
     int g_test_child_node_count = 0;
     int g_test_index = 0;
-
+    
     while (!trie_nodes.empty()){
         node* cur = trie_nodes.front(); trie_nodes.pop();
         int parent_index = parent.front(); parent.pop();
         trie_node_arr[index] = cur->map;
-        if (parent_index > 0){
+        if (parent_index >= 0){
             if (parent_index == cur_parent){
                 cur_child_count += 1;
             }else{
@@ -355,8 +361,11 @@ uint32_t* TrieUnrolling(uint32_t *trie_node_arr, node* root){
             }
             trie_node_arr[parent_index + cur_child_count] = index; 
         }
-        int n_children = __builtin_popcount(cur->map);
-
+        
+        int n_children = __builtin_popcount(cur->map & UINT32_MAX_BIT_SET_COMPLEMENT);
+        // cout << bitset<MAX_BITS>(cur->map) << endl;
+        // cout << bitset<MAX_BITS>(trie_node_arr[index]) << endl;
+        // cout << bitset<MAX_BITS>(cur->map & UINT32_MAX_BIT_SET_COMPLEMENT) << endl;
         // TODO: remove ALPHA signatures
         g_test_local[g_test_index] = cur->map;
         if (n_children){
@@ -364,6 +373,7 @@ uint32_t* TrieUnrolling(uint32_t *trie_node_arr, node* root){
         }
         g_test_child_node_count += n_children;
         g_test_index += 2;
+        
 
         for(int i=0; i<n_children; ++i){
             trie_nodes.push(&cur->next_v[i]);
@@ -395,8 +405,10 @@ uint32_t* ConstructLocalized(AdaptiveTrieNode* root, bool greater=false, bool pe
         cur_l->pop();
         // TODO: implement level sorting
         arr[index] = cur->map;
-
+        
         if (par_index >= 0){
+            // store index of child relative to parent, i.e. difference between parent and child indexes for future pointer optimization
+            //arr[par_index+1] = index - par_index;
             arr[par_index+1] = index;
         }
 
@@ -404,6 +416,7 @@ uint32_t* ConstructLocalized(AdaptiveTrieNode* root, bool greater=false, bool pe
         for(auto &a : cur->next_v){
             next_l->push(pair<AdaptiveTrieNode*, uint32_t>({a, countc++?-1:index}));
         }
+        index += 2;
 
         if (cur_l->empty()){
             queue<pair<AdaptiveTrieNode*, uint32_t>>* temp = cur_l;
@@ -420,15 +433,15 @@ uint32_t* ConstructLocalized(AdaptiveTrieNode* root, bool greater=false, bool pe
                 else
                     sort(sort_buffer.begin(), sort_buffer.end(), compL);
         
-                if (sort_buffer.size() > 1 && print_iterations)
-                    cout << "testing sorted next level: " << sort_buffer[0].first->accesses << " vs " << sort_buffer[1].first->accesses << endl;
+                // if (sort_buffer.size() > 1 && print_iterations)
+                //     cout << "testing sorted next level: " << sort_buffer[0].first->accesses << " vs " << sort_buffer[1].first->accesses << endl;
                 while(!sort_buffer.empty()){
                     // TODO: push_back and pop after ascending sort
                     next_l->push(sort_buffer.back());
-                    if(print_iterations){
-                        cout << "testing sorting by accesses: " << sort_buffer.back().first->accesses << endl;
-                        print_iterations--;
-                    }
+                    // if(print_iterations){
+                    //     cout << "testing sorting by accesses: " << sort_buffer.back().first->accesses << endl;
+                    //     print_iterations--;
+                    // }
                     sort_buffer.pop_back();
                 }
             }
@@ -442,54 +455,123 @@ uint32_t* ConstructLocalized(AdaptiveTrieNode* root, bool greater=false, bool pe
 bool testCompareArr(uint32_t* localized_arr, uint32_t* arr){
     int indp = 0;
     int indn = 0;
+    uint32_t * indnl = localized_arr;
     for (int i=0; i<total_node_count; i++){
-        if (arr[indp] != localized_arr[indn]){
-            // cout << "anomally in ordering - test!" << endl;
+        if (arr[indp] != (*indnl)){
+            cout << "@# anomally in ordering - test!" << endl;
+            cout << arr[indp] << " vs local: " << (*indnl) << endl; 
         }
-        int n_child = __builtin_popcount(arr[indp]);
-        if (n_child)
-            cout << n_child << ", ";
+        int n_child = __builtin_popcount(arr[indp] & UINT32_MAX_BIT_SET_COMPLEMENT);
+
         for (int j=0; j<n_child; ++j){
-            // cout << "mapping child... ";
-            if (localized_arr[localized_arr[indn+1] + 2*j] != arr[arr[indp+j+1]] ){
-                // cout << "anomally in children - test!" << endl;
+            if ((*(localized_arr + (*(indnl+1) + 2*j))) != arr[arr[indp+j+1]] ){
+                cout << "@# anomally in children - test!" << endl;
             }
         }
-        indp += n_child;
-        indn += 2;
+        indp += n_child + 1;
+        indnl += 2;
     }
 }
 
 inline bool unrolledSearch(uint32_t* arr, const char *word){
     int index = 0;
+    uint32_t _charIndexMask= 0;
     for (const char *ch=word; *ch != '\0'; ++ch){
         uint32_t &_map = arr[index];
-        uint32_t _charIndexMask = (1 << (*ch - 'a'));
+        _charIndexMask = (1 << (*ch - 'a'));
+        // cout << "letter : " << *ch << endl;
+        // cout << "map:             " << bitset<MAX_BITS>(_map) << endl;
+        // cout << "char index mask: " << bitset<MAX_BITS>(_charIndexMask) << endl;
+        // cout << "cur index: " << index << endl;
+        // cout << "n_prev children: " << __builtin_popcount(_map & (_charIndexMask - 1 )) << endl;
+        // cout << "next index: " << arr[index + __builtin_popcount(_map & (_charIndexMask - 1 )) + 1] << endl;
         if (_map & _charIndexMask){
             index = arr[index + __builtin_popcount(_map & (_charIndexMask - 1 )) + 1];
         }else {
             return false;
         }
     }
-    if (arr[index] & 1 << MAX_BITS)
+    if (arr[index] & UINT32_MAX_BIT_SET)
         return true; // word ends here
     return false;
 }
 
 inline bool localizedAdaptiveUnrolledSearch(uint32_t* localized_arr, const char *word){
     int index = 0;
+    uint32_t* _map = localized_arr;
+    /*
+    @@ GAIN localized (multicore) over unrolled hamt : 71.0216%, and ratio: 1.40802
+    @@ GAIN localized (multicore) over standard hamt : 40.6755%, and ratio: 2.45848
+    @@ time taken - hash Trie search (multithreaded) : 1.59104e+06
+    @@ GAIN unrolled hamt trie (multicore) over hash Trie : 16.1325%, and ratio: 6.1
+    */
+    uint32_t _charIndexMask= 0;
     for (const char *ch=word; *ch != '\0'; ++ch){
         // cout << "looping ... ";
-        uint32_t &_map = localized_arr[index];
-        uint32_t _charIndexMask = (1 << (*ch - 'a'));
-        if (_map & _charIndexMask){
-            index = localized_arr[index+1] + __builtin_popcount(_map & (_charIndexMask - 1 )) << 2;
+        // uint32_t &_map = localized_arr[index];
+        // _map = localized_arr + index;
+        _charIndexMask = (1 << (*ch - 'a'));
+        // cout << "letter : " << *ch << endl;
+        // cout << "map:             " << bitset<MAX_BITS>(*_map) << endl;
+        // cout << "char index mask: " << bitset<MAX_BITS>(_charIndexMask) << endl;
+        // // cout << "cur index: " << index << endl;
+        // cout << "n_prev children: " << __builtin_popcount((*_map) & (_charIndexMask - 1 )) << endl;
+        // cout << "n_prev children * 2 bitwise " << (__builtin_popcount((*_map) & (_charIndexMask - 1 )) << 1) << endl;
+        // cout << "n_prev children * 2 " << (__builtin_popcount((*_map) & (_charIndexMask - 1 )) * 2) << endl; 
+        // cout << "left child index: " << *(_map+1) << endl;
+        // cout << "next index: " << ((*(_map+1)) + (__builtin_popcount((*_map) & (_charIndexMask - 1 )) << 1)) << endl;
+        // TODO: pointer optimization: storing difference from index instead of child index to directly increment pointer
+        if ((*_map) & _charIndexMask){
+            _map = localized_arr + (*(_map+1)) + (__builtin_popcount((*_map) & (_charIndexMask - 1 )) << 1);
         }else {
-            // cout << "returning false";
+            // cout << "returning false pre word ending" << endl;
             return false;
         }
     }
-    if (localized_arr[index] & 1 << MAX_BITS)
+    // cout << " --- word ending !!!! ---- " << endl;
+    if ((*_map) & UINT32_MAX_BIT_SET)
+        return true; // word ends here
+    // cout << "returning false post!!!" << endl;
+    return false;
+}
+
+inline bool localizedAdaptiveUnrolledSearchPointRelative(uint32_t* localized_arr, const char *word){
+    int index = 0;
+    uint32_t* _map = localized_arr;
+    /*
+    Requires parent to store relative distance to child for it to work
+    Post pointer math optimizations:
+
+    @@ time taken - adaptive search (multithreaded) : 181773
+    @@ GAIN adaptive (multicore) over unrolled hamt : 69.5489%, and ratio: 1.43784
+    # order: greater, less, none
+    @@ time taken - localized search (multithreaded) : 186468
+    @@ GAIN localized (multicore) over unrolled hamt : 71.3453%, and ratio: 1.40163
+    @@ GAIN localized (multicore) over standard hamt : 42.0926%, and ratio: 2.37572
+    @@ time taken - hash Trie search (multithreaded) : 1.59047e+06
+    @@ GAIN unrolled hamt trie (multicore) over hash Trie : 16.4329%, and ratio: 6.08535
+
+    */
+    uint32_t _charIndexMask= 0;
+    for (const char *ch=word; *ch != '\0'; ++ch){
+        _charIndexMask = (1 << (*ch - 'a'));
+        // cout << "letter : " << *ch << endl;
+        // cout << "map:             " << bitset<MAX_BITS>(*_map) << endl;
+        // cout << "char index mask: " << bitset<MAX_BITS>(_charIndexMask) << endl;
+        // // cout << "cur index: " << index << endl;
+        // cout << "n_prev children: " << __builtin_popcount((*_map) & (_charIndexMask - 1 )) << endl;
+        // cout << "n_prev children * 2 bitwise " << (__builtin_popcount((*_map) & (_charIndexMask - 1 )) << 1) << endl;
+        // cout << "n_prev children * 2 " << (__builtin_popcount((*_map) & (_charIndexMask - 1 )) * 2) << endl; 
+        // cout << "left child index: " << *(_map+1) << endl;
+        // cout << "next index: " << ((*(_map+1)) + (__builtin_popcount((*_map) & (_charIndexMask - 1 )) << 1)) << endl;
+        // TODO: pointer optimization: storing difference from index instead of child index to directly increment pointer
+        if ((*_map) & _charIndexMask){
+            _map += (*(_map+1)) + (__builtin_popcount((*_map) & (_charIndexMask - 1 )) << 1);
+        }else {
+            return false;
+        }
+    }
+    if ((*_map) & UINT32_MAX_BIT_SET)
         return true; // word ends here
     return false;
 }
@@ -543,7 +625,7 @@ inline bool AdaptiveSearch(AdaptiveTrieNode* root, const char *word){
         }
         root = (root->next_v[__builtin_popcount(root->map & (bitmask - 1))]);
     }
-    if (root->map & 1 << MAX_BITS)
+    if (root->map & UINT32_MAX_BIT_SET)
         return true; // word ends here
     return false;
 }
@@ -662,10 +744,16 @@ void adaptiveSearchRoutine(uint32_t *arr, vector<string> *list, int st, int en){
     }
 }
 
-void localizedAdaptiveSearchRoutine(uint32_t* localized_arr, vector<string> *list, int st, int en){
-    for (int i=st; i<en; ++i){
-        localizedAdaptiveUnrolledSearch(localized_arr, (*list)[i].c_str());
-    }
+void localizedAdaptiveSearchRoutine(uint32_t* localized_arr, vector<string> *list, int st, int en, int type){
+    if (type==0)
+        for (int i=st; i<en; ++i){
+            localizedAdaptiveUnrolledSearch(localized_arr, (*list)[i].c_str());
+        }
+    else if (type==1)
+        for (int i=st; i<en; ++i){
+            localizedAdaptiveUnrolledSearchPointRelative(localized_arr, (*list)[i].c_str());
+        }
+    
 }
 
 AdaptiveTrieNode* adaptiveAddRoutine(node* root, vector<string> &list, int &lim){
@@ -683,12 +771,21 @@ int main () {
     string line;
     int word_count = 0;
     ifstream myfile ("words_alpha_370k.txt");
+    int word_limit = 10;
+    if(LIMIT_WORD_LIST)
+        cout << " Limiting word list to: " << word_limit << endl;
     if (myfile.is_open()){
         while ( getline (myfile,line) ){   
+            if(LIMIT_WORD_LIST && !--word_limit)
+            {   
+                break;
+            }
             char word[line.length()];
             strcpy(word, line.c_str()); 
             word[line.length()-1] = '\0';
+            
             list.push_back(word);
+            
             ++word_count;
 
             char * st = word;
@@ -730,6 +827,7 @@ int main () {
         cout << "Word Count after mutation : " << list.size() << endl;
         lim = list.size();
     }
+    cout << "CREATED node count: " << total_node_count << endl;
 
     uint64 start_thread_t = GetTimeMs64();
     int n_threads = 11; 
@@ -762,7 +860,7 @@ int main () {
     uint64 t_u_s = GetTimeMs64();
     arr = TrieUnrolling(arr, &start);
     uint64 t_u_e = GetTimeMs64();
-
+    cout << "finished trie unrolled construction" << endl;
     start_thread_t = GetTimeMs64();
 
     for (int i=0; i<n_threads; ++i){
@@ -781,7 +879,7 @@ int main () {
     end_thread_t = GetTimeMs64();
     uint64 unrolled_hamt_time = end_thread_t - start_thread_t;
     cout << "@@ time taken - unrolled search (multithreaded) : " << unrolled_hamt_time << endl;
-    cout << "@@ GAIN unrolled (multicore) : " << double(std_hamt_time - unrolled_hamt_time) / double(std_hamt_time) * 100 << "%, and ratio: " << double(std_hamt_time) / double(unrolled_hamt_time) << endl;
+    cout << "@@ GAIN unrolled (multicore) over std hamt : " << double(unrolled_hamt_time) / double(std_hamt_time) * 100 << "%, and ratio: " << double(std_hamt_time) / double(unrolled_hamt_time) << endl;
 
     double hamt_bytes = double((total_node_count - 1) * 8 + 4 * total_node_count);
     int hamt_final_bytes = 4 * (total_node_count + (total_node_count - 1));
@@ -815,34 +913,52 @@ int main () {
         end_thread_t = GetTimeMs64();
         double adaptive_hamt_time = double(end_thread_t - start_thread_t);
         cout << "@@ time taken - adaptive search (multithreaded) : " << adaptive_hamt_time << endl;
-        cout << "@@ GAIN adaptive (multicore) : " << (double(unrolled_hamt_time) - adaptive_hamt_time) / double(unrolled_hamt_time) * 100 << "%, and ratio: " << double(unrolled_hamt_time) / double(adaptive_hamt_time) << endl;
+        cout << "@@ GAIN adaptive (multicore) over unrolled hamt : " << double(adaptive_hamt_time) / double(unrolled_hamt_time) * 100 << "%, and ratio: " << double(unrolled_hamt_time) / double(adaptive_hamt_time) << endl;
     }
 
     // single core localized search
     // TODO: PRIORITY affirm sorted clustering correctness
-    uint32_t* localized_arrG = ConstructLocalized(a_root, true, true);
-    uint32_t* localized_arrL = ConstructLocalized(a_root, false, true);
+    // uint32_t* localized_arrG = ConstructLocalized(a_root, true, true);
+    // uint32_t* localized_arrL = ConstructLocalized(a_root, false, true);
     uint32_t* localized_arr = ConstructLocalized(a_root, false, false);
     uint32_t* localized_iters[3];
-    localized_iters[0] = localized_arrG;
-    localized_iters[1] = localized_arrL;
-    localized_iters[2] = localized_arr;
+    localized_iters[0] = localized_arr;
+    // localized_iters[1] = localized_arr;
+    // localized_iters[2] = localized_arr;
 
     if (RUN_LOCALIZED_CORRECTNESS_TEST){
-        // testCompareArr(localized_arr, arr);
+        testCompareArr(localized_arr, arr);
+        cout << endl << endl << "Running tests, lim: " << lim << endl << endl;
+        int test_quant = lim/5;
         for (int i=0; i<lim; ++i){
-            if ( search(root, list[i]) != localizedAdaptiveUnrolledSearch(localized_arrG, list[i].c_str())){
-                cout << "$$$$ test failed!!!!" << endl;
-            }if ( search(root, list[i]) != localizedAdaptiveUnrolledSearch(localized_arrL, list[i].c_str())){
-                cout << "$$$$ test failed!!!!" << endl;
+            if (i%test_quant == 0){
+                cout << "$$ 1M test run! check result..." << endl;
+            }
+            if (search(root, list[i]) != unrolledSearch(arr, list[i].c_str()))
+             {cout << "@# baseline test failed! unrolled search!" << endl;
+            }else if (i%test_quant == 0){
+                cout << "$$   unrolled search baseline passed!" << endl;
+            }
+            //AdaptiveSearch(AdaptiveTrieNode* root, const char *word)
+            if (search(root, list[i]) != AdaptiveSearch(a_root, list[i].c_str()))
+            {cout << "@# baseline test failed! adaptive search!" << endl;
+            }else if (i%test_quant == 0){
+                cout << "$$   adaptive search baseline passed!" << endl;
+            }
+            if ( search(root, list[i]) != localizedAdaptiveUnrolledSearch(localized_arr, list[i].c_str())){
+                cout << "@# test localizedAdaptiveUnrolledSearch failed!!!!" << endl;
+            }else if(i%test_quant == 0){
+                cout << "$$ 1M test passed! localizedAdaptiveUnrolledSearch" << endl;
             }
         }
+        cout << " ..... test ended ......" << endl << endl;
     }
     if (RUN_LOCALIZED_BENCHMARK){
         // multicore localized adaptive search
         cout << "# order: greater, less, none" << endl;
-        for (int i=0; i<3; ++i){
-            uint32_t* cur = localized_iters[i];
+        int localized_count = 1;
+        for (int l=0; l<localized_count; ++l){
+            uint32_t* cur = localized_iters[0];
             start_thread_t = GetTimeMs64();
             for (int i=0; i<n_threads; ++i){
                 int st = (i * chunk_size);
@@ -851,7 +967,7 @@ int main () {
                     end = lim-1;
                 if (st >= lim)
                     st = lim-1;
-                t_store[i] = new thread(localizedAdaptiveSearchRoutine, cur, &list, st, end);
+                t_store[i] = new thread(localizedAdaptiveSearchRoutine, cur, &list, st, end, l);
             }
             for (int i=0; i<n_threads; ++i){
                 t_store[i]->join();
@@ -859,8 +975,8 @@ int main () {
             end_thread_t = GetTimeMs64();
             double localized_hamt_time = double(end_thread_t - start_thread_t);
             cout << "@@ time taken - localized search (multithreaded) : " << localized_hamt_time << endl;
-            cout << "@@ GAIN localized (multicore) over unrolled hamt : " << (double(unrolled_hamt_time) - localized_hamt_time) / double(unrolled_hamt_time) * 100 << "%, and ratio: " << double(unrolled_hamt_time) / double(localized_hamt_time) << endl;
-            cout << "@@ GAIN localized (multicore) over standard hamt : " << (double(std_hamt_time) - localized_hamt_time) / double(std_hamt_time) * 100 << "%, and ratio: " << double(std_hamt_time) / double(localized_hamt_time) << endl;
+            cout << "@@ GAIN localized (multicore) over unrolled hamt : " << double(localized_hamt_time) / double(unrolled_hamt_time) * 100 << "%, and ratio: " << double(unrolled_hamt_time) / double(localized_hamt_time) << endl;
+            cout << "@@ GAIN localized (multicore) over standard hamt : " << double(localized_hamt_time) / double(std_hamt_time) * 100 << "%, and ratio: " << double(std_hamt_time) / double(localized_hamt_time) << endl;
         }
     }
 
@@ -883,7 +999,7 @@ int main () {
         end_thread_t = GetTimeMs64();
         double hash_trie = double(end_thread_t - start_thread_t);
         cout << "@@ time taken - hash Trie search (multithreaded) : " << hash_trie << endl;
-        cout << "@@ GAIN hash Trie (multicore) : " << (double(hash_trie) - unrolled_hamt_time) / double(hash_trie) * 100 << "%, and ratio: " << double(hash_trie) / double(unrolled_hamt_time) << endl;
+        cout << "@@ GAIN unrolled hamt trie (multicore) over hash Trie : " << double(unrolled_hamt_time) / double(hash_trie) * 100 << "%, and ratio: " << double(hash_trie) / double(unrolled_hamt_time) << endl;
     }
 
     return 0; 
@@ -895,43 +1011,45 @@ int main () {
 
 
     Results: consistent 75% / 4.5 times gains over standard HAMT and 15-20 times over hashmap based Trie
+    
+    n_threads = 1
 
-    Word Count : 370099
-
-    @@ time taken (single_core - HAMT construction) : 422494
-    @@ time taken (single_core - HASH TRIE construction) : 938945
-
-    Word Count after mutation : 9765965
-
-    @@ time taken - std hamt search (multithreaded) : 457478
-
-    Making array of size: 2055603
-
-    @@ time taken - unrolled search (multithreaded) : 157847
-    @@ GAIN unrolled (multicore) : 65.4963%, and ratio: 2.89824
-
-    Space Eff.: 55.5556% base, 33.3333% std hamt
-
-    Making array of size: 2055603
-
-    Done Adaptive flatening!! time: 3710837
-
-    @@ time taken - adaptive search (multithreaded) : 271302
-    @@ GAIN adaptive (multicore) : -71.8766%, and ratio: 0.581813
-
+    @@ time taken - adaptive search (multithreaded) : 1.61972e+06
+    @@ GAIN adaptive (multicore) over unrolled hamt : 84.4923%, and ratio: 1.18354
     # order: greater, less, none
-    @@ time taken - localized search (multithreaded) : 29023
-    @@ GAIN localized (multicore) over unrolled hamt : 81.6132%, and ratio: 5.43869
-    @@ GAIN localized (multicore) over standard hamt : 93.6559%, and ratio: 15.7626
+    @@ time taken - localized search (multithreaded) : 1.60001e+06
+    (Reference)
+    @@ GAIN localized (multicore) over unrolled hamt : 83.464%, and ratio: 1.19812
+    @@ GAIN localized (multicore) over standard hamt : 70.2865%, and ratio: 1.42275
+    @@ time taken - localized search (multithreaded) : 1.61413e+06
+    (Int)
+    @@ GAIN localized (multicore) over unrolled hamt : 84.2006%, and ratio: 1.18764
+    @@ GAIN localized (multicore) over standard hamt : 70.9068%, and ratio: 1.4103
+    @@ time taken - localized search (multithreaded) : 1.6373e+06
+    (Pointer)
+    @@ GAIN localized (multicore) over unrolled hamt : 85.4091%, and ratio: 1.17084
+    @@ GAIN localized (multicore) over standard hamt : 71.9245%, and ratio: 1.39035
+    @@ time taken - hash Trie search (multithreaded) : 1.29708e+07
+    @@ GAIN unrolled hamt trie (multicore) over hash Trie : 14.7795%, and ratio: 6.76615
 
-    @@ time taken - localized search (multithreaded) : 29693
-    @@ GAIN localized (multicore) over unrolled hamt : 81.1887%, and ratio: 5.31597
-    @@ GAIN localized (multicore) over standard hamt : 93.5094%, and ratio: 15.4069
+    n_threads = 11
 
-    @@ time taken - localized search (multithreaded) : 35635
-    @@ GAIN localized (multicore) over unrolled hamt : 77.4243%, and ratio: 4.42955
-    @@ GAIN localized (multicore) over standard hamt : 92.2106%, and ratio: 12.8379
+    @@ time taken - adaptive search (multithreaded) : 242833
+    @@ GAIN adaptive (multicore) over unrolled hamt : 90.8568%, and ratio: 1.10063
+    # order: greater, less, none
+    @@ time taken - localized search (multithreaded) : 297410
+    (Reference)
+    @@ GAIN localized (multicore) over unrolled hamt : 111.277%, and ratio: 0.898658
+    @@ GAIN localized (multicore) over standard hamt : 68.9006%, and ratio: 1.45137
+    @@ time taken - localized search (multithreaded) : 306181
+    (Int)
+    @@ GAIN localized (multicore) over unrolled hamt : 114.559%, and ratio: 0.872915
+    @@ GAIN localized (multicore) over standard hamt : 70.9325%, and ratio: 1.40979
+    @@ time taken - localized search (multithreaded) : 382846
+    (Pointer)
+    @@ GAIN localized (multicore) over unrolled hamt : 143.243%, and ratio: 0.698114
+    @@ GAIN localized (multicore) over standard hamt : 88.6934%, and ratio: 1.12748
+    @@ time taken - hash Trie search (multithreaded) : 2.20277e+06
+    @@ GAIN unrolled hamt trie (multicore) over hash Trie : 12.1334%, and ratio: 8.24174
 
-    @@ time taken - hash Trie search (multithreaded) : 220111
-    @@ GAIN hash Trie (multicore) : 28.2875%, and ratio: 1.39446
 */
