@@ -139,6 +139,10 @@ uint32_t* ConstructLocalized(AdaptiveTrieNode* root, bool greater, bool perform_
 inline bool localizedAdaptiveUnrolledSearch(uint32_t* localized_arr, const char *word);
 inline bool localizedAdaptiveUnrolledSearch64Bit(const char *word);
 inline bool localizedAdaptiveUnrolledSearchPointRelative(uint32_t* localized_arr, const char *word);
+// research implementations
+inline bool localizedAdaptiveUnrolledQuantumOffsetSearch(const char *word);
+inline bool localizedAdaptiveUnrolledSeparatedSearch(const char *word);
+inline bool localizedAdaptiveUnrolledOffsetSearch(const char *word);
 
 // word mutator
 vector<string> mutateList(vector<string> &list);
@@ -177,7 +181,7 @@ uint64 GetTimeMs64(){
      gettimeofday(&tv, NULL);
      uint64 ret = tv.tv_usec;
      /* Convert from micro seconds (10^-6) to milliseconds (10^-3) */
-     ret /= 1;
+     ret /= 1000;
      /* Adds the seconds (10^0) after converting them to milliseconds (10^-3) */
      ret += (tv.tv_sec * 1000000);
      return ret;
@@ -597,12 +601,6 @@ inline bool localizedAdaptiveUnrolledSearch(uint32_t* localized_arr, const char 
     int index = 0;
     uint32_t* _map = localized_arr;
     // cout << "searching localized : " << word << endl;
-    /*
-    @@ GAIN localized (multicore) over unrolled hamt : 71.0216%, and ratio: 1.40802
-    @@ GAIN localized (multicore) over standard hamt : 40.6755%, and ratio: 2.45848
-    @@ time taken - hash Trie search (multithreaded) : 1.59104e+06
-    @@ GAIN unrolled hamt trie (multicore) over hash Trie : 16.1325%, and ratio: 6.1
-    */
     uint32_t _charIndexMask= 0;
     for (const char *ch=word; *ch != '\0'; ++ch){
         // cout << "looping ... ";
@@ -641,12 +639,6 @@ inline bool localizedAdaptiveUnrolledSearch64Bit(const char *word){
     int index = 0;
     uint64_t* _map = arr64;
     // cout << "searching (64 BIT) : " << word << endl;
-    /*
-    @@ GAIN localized (multicore) over unrolled hamt : 71.0216%, and ratio: 1.40802
-    @@ GAIN localized (multicore) over standard hamt : 40.6755%, and ratio: 2.45848
-    @@ time taken - hash Trie search (multithreaded) : 1.59104e+06
-    @@ GAIN unrolled hamt trie (multicore) over hash Trie : 16.1325%, and ratio: 6.1
-    */
     uint64_t _charIndexMask= 0;
     for (const char *ch=word; *ch != '\0'; ++ch){
         // cout << "looping ... ";
@@ -810,16 +802,6 @@ inline bool localizedAdaptiveUnrolledSearchPointRelative(uint32_t* localized_arr
     /*
     Requires parent to store relative distance to child for it to work
     Post pointer math optimizations:
-
-    @@ time taken - adaptive search (multithreaded) : 181773
-    @@ GAIN adaptive (multicore) over unrolled hamt : 69.5489%, and ratio: 1.43784
-    # order: greater, less, none
-    @@ time taken - localized search (multithreaded) : 186468
-    @@ GAIN localized (multicore) over unrolled hamt : 71.3453%, and ratio: 1.40163
-    @@ GAIN localized (multicore) over standard hamt : 42.0926%, and ratio: 2.37572
-    @@ time taken - hash Trie search (multithreaded) : 1.59047e+06
-    @@ GAIN unrolled hamt trie (multicore) over hash Trie : 16.4329%, and ratio: 6.08535
-
     */
     uint32_t _charIndexMask= 0;
     for (const char *ch=word; *ch != '\0'; ++ch){
@@ -935,10 +917,6 @@ uint32_t* AdaptiveTrieFlattening(uint32_t* trie_node_arr, AdaptiveTrieNode* root
         index += cur->next_v.size() + 1;
     }
     return trie_node_arr;
-}
-
-uint32_t* AdaptiveTrieFlattening_localized(uint32_t* arr, uint32_t* prearr){
-
 }
 
 // TODO: implement, address of child in 2nd half of array

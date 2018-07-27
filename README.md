@@ -2,9 +2,9 @@
 ## keras RNN (GRU) and CNN for text analysis
 
 #### 377 K words in dictionary 
-#### 9.76 M word queries in 30 ms (hexacore, i7) with localized adaptive tree folding for static HAMT
+#### 9.76 M word queries in 190 ms (hexacore, i7) with localized adaptive tree folding for static HAMT
 
-Compressed Flattening of hamt provides multicore search speed gains of 4-5 times and reduces memory overhead by 33% over standard struct-based hamt implementation and provides speed gains of 15-20 times, while taking up 1/2 the space over hash-map based tries. 
+Compressed Flattening of hamt provides multicore search speed gains of 2+ times and reduces memory overhead by 33% over standard struct-based hamt implementation and provides speed gains of 6+ times, while taking up 1/2 the space over hash-map based tries. 
 https://en.wikipedia.org/wiki/Hash_array_mapped_trie
 
 The benchmarks are run on a hexacore with 370k unique word dict which is mutated via Gaussian distributions to 9M+ words.
